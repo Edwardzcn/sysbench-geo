@@ -111,6 +111,8 @@ sb_arg_t general_args[] =
          "values representing the amount of time in seconds elapsed from start "
          "of test when report checkpoint(s) must be performed. Report "
          "checkpoints are off by default.", "", LIST),
+  SB_OPT("prepare-range", "describe MySQL prepare key range", NULL, LIST),
+  SB_OPT("run-range", "describe MySQL run key range", NULL, LIST),
   SB_OPT("debug", "print more debugging info", "off", BOOL),
   SB_OPT("validate", "perform validation checks where possible", "off", BOOL),
   SB_OPT("help", "print help and exit", "off", BOOL),
@@ -552,7 +554,6 @@ static int parse_general_arguments(int argc, char *argv[])
   /* Parse command line arguments */
   testname = NULL;
   cmdname = NULL;
-
   for (int i = 1; i < argc; i++)
   {
     if (strncmp(argv[i], "--", 2))
@@ -1039,7 +1040,6 @@ static int threads_started_callback(void *arg)
     return 1;
 
   sb_globals.threads_running = sb_globals.threads;
-
   sb_timer_start(&sb_exec_timer);
   sb_timer_copy(&sb_intermediate_timer, &sb_exec_timer);
   sb_timer_copy(&sb_checkpoint_timer, &sb_exec_timer);
@@ -1104,7 +1104,6 @@ static int run_test(sb_test_t *test)
     log_errno(LOG_FATAL, "sb_barrier_init() failed");
     return 1;
   }
-
 
   if (sb_globals.report_interval > 0)
   {
@@ -1295,6 +1294,8 @@ static int init(void)
   option_t *opt;
   char     *tmp;
   sb_list_t         *checkpoints_list;
+  sb_list_t         *prepare_range_list;
+  sb_list_t         *run_range_list;
   sb_list_item_t    *pos_val;
   value_t           *val;
 
@@ -1413,6 +1414,22 @@ static int init(void)
   {
     qsort(sb_globals.checkpoints, sb_globals.n_checkpoints,
           sizeof(unsigned int), checkpoint_cmp);
+  }
+
+  unsigned int prepare_range_cnt = 0;
+  prepare_range_list=sb_get_value_list("prepare-range");
+  SB_LIST_FOR_EACH(pos_val, prepare_range_list)
+  {
+    val = SB_LIST_ENTRY(pos_val, value_t, listitem)->data;
+    sb_globals.prepare_range[prepare_range_cnt++]=(unsigned int) atoi(val);
+  }
+
+  unsigned int run_range_cnt = 0;
+  run_range_list=sb_get_value_list("run-range");
+  SB_LIST_FOR_EACH(pos_val, prepare_range_list)
+  {
+    val = SB_LIST_ENTRY(pos_val, value_t, listitem)->data;
+    sb_globals.run_range[run_range_cnt++]=(unsigned int) atoi(val);
   }
 
   /* Initialize timers */

@@ -56,11 +56,13 @@ sysbench.cmdline.options = {
    range_selects =
       {"Enable/disable all range SELECT queries", true},
    auto_inc =
-   {"Use AUTO_INCREMENT column as Primary Key (for MySQL), " ..
+      {"Use AUTO_INCREMENT column as Primary Key (for MySQL), " ..
        "or its alternatives in other DBMS. When disabled, use " ..
        "client-generated IDs", true},
    create_table_options =
       {"Extra CREATE TABLE options", ""},
+   skip_create = 
+      {"Skip create table when prepare.", false},
    skip_trx =
       {"Don't start explicit transactions and execute all queries " ..
           "in the AUTOCOMMIT mode", false},
@@ -78,7 +80,16 @@ sysbench.cmdline.options = {
           "PostgreSQL driver. The only currently supported " ..
           "variant is 'redshift'. When enabled, " ..
           "create_secondary is automatically disabled, and " ..
-          "delete_inserts is set to 0"}
+          "delete_inserts is set to 0"},
+   -- Export from sb_lua.c
+   -- prepare_range = 
+   --    {"Range of keys that client prepare means server have" ..
+   --       "the ownership of these keys initially ", [[]]},
+   -- run_range =
+   --    {"Range of keys client will visit when script runs "..
+   --       "means SQL server will try to get the ownership " ..
+   --       "of them and statements r/w these tables generated " ..
+   --       "by sysbench client may have transfer overhead", [[]]}
 }
 
 -- Prepare the dataset. This command supports parallel execution, i.e. will
@@ -86,10 +97,18 @@ sysbench.cmdline.options = {
 function cmd_prepare()
    local drv = sysbench.sql.driver()
    local con = drv:connect()
-
+   
+   
    for i = sysbench.tid % sysbench.opt.threads + 1, sysbench.opt.tables,
    sysbench.opt.threads do
-     create_table(drv, con, i)
+      -- prepare only use 1 thread
+      if sysbench.opt.skip_create then
+         print("Skip creating tables in prepare cmd");
+         create_bulk_insert(drv,con,i)
+      else 
+         create_table(drv, con, i)
+         create_bulk_insert(drv,con,i)
+      end
    end
 end
 
@@ -199,13 +218,37 @@ CREATE TABLE sbtest%d(
 ) %s %s]],
       table_num, id_def, id_index_def, engine_def,
       sysbench.opt.create_table_options)
-
+   -- no use now
+   -- check_size_match_range()
+   if drv:name() == "mysql" then
+      if sysbench.opt.auto_inc then
+         if next(sysbench.opt.prepare_range) ~= nil then
+            query = query..string.format("AUTO_INCREMENT=%d",sysbench.opt.prepare_range[1])
+            print(query)
+         end
+      -- else 
+         -- what if not auto_inc
+      end
+   end
    con:query(query)
 
-   if (sysbench.opt.table_size > 0) then
-      print(string.format("Inserting %d records into 'sbtest%d'",
-                          sysbench.opt.table_size, table_num))
+   -- Alter the auto_inc
+   if drv:name() == "mysql" then
+      if sysbench.opt.auto_inc then
+         if next(sysbench.opt.prepare_range) ~= nil then
+            query = string.format("ALTER TABLE sbtest%d AUTO_INCREMENT=%d;", table_num, sysbench.opt.prepare_range[1])
+            con:query(query)
+         end
+      end
    end
+end
+
+function create_bulk_insert(drv, con, table_num)
+   local query
+   -- if (sysbench.opt.table_size > 0) then
+   --    print(string.format("Inserting %d records into 'sbtest%d'",
+   --                        sysbench.opt.table_size, table_num))
+   -- end
 
    if sysbench.opt.auto_inc then
       query = "INSERT INTO sbtest" .. table_num .. "(k, c, pad) VALUES"
@@ -217,24 +260,78 @@ CREATE TABLE sbtest%d(
 
    local c_val
    local pad_val
-
-   for i = 1, sysbench.opt.table_size do
-
-      c_val = get_c_value()
-      pad_val = get_pad_value()
-
-      if (sysbench.opt.auto_inc) then
-         query = string.format("(%d, '%s', '%s')",
-                               sysbench.rand.default(1, sysbench.opt.table_size),
-                               c_val, pad_val)
-      else
-         query = string.format("(%d, %d, '%s', '%s')",
-                               i,
-                               sysbench.rand.default(1, sysbench.opt.table_size),
-                               c_val, pad_val)
+   local pair_number
+   local id_start
+   local id_end
+   assert(#sysbench.opt.prepare_range % 2 == 0, "The prepare_range argument must be a list of pairs. E.g. 1,1000,2000,5000")
+   pair_number = #sysbench.opt.prepare_range /2
+   -- print(string.format("Total pair is: %d",pair_number))
+   for pair_index = 1, pair_number do
+      id_start = sysbench.opt.prepare_range[pair_index*2-1]
+      id_end = sysbench.opt.prepare_range[pair_index*2]
+      -- just for test
+      print(string.format("Inserting %d records into 'sbtest%d' id from %d to %d", id_end-id_start+1, table_num, id_start, id_end))
+      for i = id_start, id_end do
+         c_val = get_c_value()
+         pad_val = get_pad_value()
+         if (sysbench.opt.auto_inc) then
+            -- TODO: secondary index change to all range
+            query = string.format("(%d, '%s', '%s')",
+                                 sysbench.rand.default(tonumber(id_start), tonumber(id_end)),
+                                 c_val, pad_val)
+         else
+            -- TODO: secondary index change to all range
+            query = string.format("(%d, %d, '%s', '%s')",
+                                 i,
+                                 sysbench.rand.default(tonumber(id_start), tonumber(id_end)),
+                                 c_val, pad_val)
+         end
+         con:bulk_insert_next(query)
       end
+   end
+   -- id_start = sysbench.opt.prepare_range[1]
+   -- id_end = sysbench.opt.prepare_range[2]
+   -- if id_start ~=nil and id_end ~= nil then
+   --    print(string.format("Inserting %d records into 'sbtest%d' id from %d to %d", id_end-id_start+1, table_num, id_start, id_end))
+   --    for i = id_start, id_end do
+   --       c_val = get_c_value()
+   --       pad_val = get_pad_value()
+   --       if (sysbench.opt.auto_inc) then
+   --          -- TODO: secondary index change to all range
+   --          query = string.format("(%d, '%s', '%s')",
+   --                               sysbench.rand.default(tonumber(id_start), tonumber(id_end)),
+   --                               c_val, pad_val)
+   --       else
+   --          -- TODO: secondary index change to all range
+   --          query = string.format("(%d, %d, '%s', '%s')",
+   --                               i,
+   --                               sysbench.rand.default(tonumber(id_start), tonumber(id_end)),
+   --                               c_val, pad_val)
+   --       end
+   --       con:bulk_insert_next(query)
+   --    end
+   -- else
+   if pair_number == 0 then
+      print(string.format("Inserting %d records into 'sbtest%d'",
+                          sysbench.opt.table_size, table_num))
+      for i = 1, sysbench.opt.table_size do
 
-      con:bulk_insert_next(query)
+         c_val = get_c_value()
+         pad_val = get_pad_value()
+
+         if (sysbench.opt.auto_inc) then
+            query = string.format("(%d, '%s', '%s')",
+                                 sysbench.rand.default(1, sysbench.opt.table_size),
+                                 c_val, pad_val)
+         else
+            query = string.format("(%d, %d, '%s', '%s')",
+                                 i,
+                                 sysbench.rand.default(1, sysbench.opt.table_size),
+                                 c_val, pad_val)
+         end
+
+         con:bulk_insert_next(query)
+      end
    end
 
    con:bulk_insert_done()
@@ -360,7 +457,6 @@ function thread_init()
    -- of connection/table/query
    stmt = {}
    param = {}
-
    for t = 1, sysbench.opt.tables do
       stmt[t] = {}
       param[t] = {}
@@ -405,7 +501,42 @@ local function get_table_num()
 end
 
 local function get_id()
-   return sysbench.rand.default(1, sysbench.opt.table_size)
+   -- reset the id according to id_range
+   if next(sysbench.opt.run_range) ~= nil then
+      -- no check for run_range out of existing key range
+      -- return sysbench.rand.default(tonumber(sysbench.opt.run_range[1]), tonumber(sysbench.opt.run_range[2]))
+      if #sysbench.opt.run_range == 2 then
+         return sysbench.rand.default(tonumber(sysbench.opt.run_range[1]), tonumber(sysbench.opt.run_range[2]))
+      elseif #sysbench.opt.run_range == 4 then
+         local len1 = tonumber(sysbench.opt.run_range[2] - tonumber(sysbench.opt.run_range[1] + 1))
+         local len2 = tonumber(sysbench.opt.run_range[4] - tonumber(sysbench.opt.run_range[3] + 1))
+         if sysbench.rand.default(1,len1+len2) <= len1 then
+            return sysbench.rand.default(tonumber(sysbench.opt.run_range[1]), tonumber(sysbench.opt.run_range[2]))
+         else
+            return sysbench.rand.default(tonumber(sysbench.opt.run_range[3]), tonumber(sysbench.opt.run_range[4]))
+         end
+      else  
+         return sysbench.rand.default_range(sysbench.opt.run_range, #sysbench.opt.run_range)
+      end
+   elseif next(sysbench.opt.prepare_range) ~= nil then
+      -- if run_range is not defined but prepare_range is defined
+      -- return sysbench.rand.default(tonumber(sysbench.opt.prepare_range[1]), tonumber(sysbench.opt.prepare_range[2]))
+      -- return sysbench.rand.default(1, sysbench.opt.table_size)
+      if #sysbench.opt.prepare_range == 2 then
+      elseif #sysbench.opt.prepare_range == 4 then
+         local len1 = tonumber(sysbench.opt.prepare_range[2] - tonumber(sysbench.opt.prepare_range[1] + 1))
+         local len2 = tonumber(sysbench.opt.prepare_range[4] - tonumber(sysbench.opt.prepare_range[3] + 1))
+         if sysbench.rand.default(1,len1+len2) <= len1 then
+            return sysbench.rand.default(tonumber(sysbench.opt.prepare_range[1]), tonumber(sysbench.opt.prepare_range[2]))
+         else
+            return sysbench.rand.default(tonumber(sysbench.opt.prepare_range[3]), tonumber(sysbench.opt.prepare_range[4]))
+         end
+      else  
+         return sysbench.rand.default_range(sysbench.opt.prepare_range, #sysbench.opt.prepare_range)
+      end
+   else 
+      return sysbench.rand.default(1, sysbench.opt.table_size)
+   end
 end
 
 function begin()
@@ -516,6 +647,23 @@ function check_reconnect()
          close_statements()
          con:reconnect()
          prepare_statements()
+      end
+   end
+end
+
+function check_size_match_range()
+   local range_size
+   if next(sysbench.opt.prepare_range) ~= nil 
+   then
+      range_size = sysbench.opt.prepare_range[2] - sysbench.opt.prepare_range[1]
+      if range_size < sysbench.opt.table_size then
+         error("The table_size=%d is less than prepare range, check it.", sysbench.opt.table_size)
+      end
+   elseif next(sysbench.opt.run_range) ~= nil then
+      range_size = sysbench.opt.run_range[2] - sysbench.opt.run_range[1]
+      if range_size < sysbench.opt.table_size
+      then
+         error("The table_size=%d is less than run range, check it.", sysbench.opt.table_size)
       end
    end
 end

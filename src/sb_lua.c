@@ -237,6 +237,7 @@ static int do_export_options(lua_State *L, bool global)
         lua_pushstring(L, tmp ? tmp : "");
         break;
       case SB_ARG_TYPE_LIST:
+        // HERE HOW TO ADD a LIST type into lua envicronment
         lua_newtable(L);
 
         sb_list_item_t *val;
@@ -942,6 +943,7 @@ static int call_custom_command(lua_State *L)
   }
 
   lua_pushstring(L, sb_lua_custom_command);
+  // Here call function in L state
 
   if (lua_pcall(L, 1, 1, 0) != 0)
   {

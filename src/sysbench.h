@@ -50,6 +50,7 @@
 
 /* Maximum number of elements in --report-checkpoints list */
 #define MAX_CHECKPOINTS 256
+#define MAX_RANGEPAIR 10
 
 /* Request types definition */
 
@@ -208,6 +209,8 @@ typedef struct
   int             warmup_time;  /* warmup time */
   uint64_t        nevents CK_CC_CACHELINE; /* event counter */
   const char      *luajit_cmd; /* LuaJIT command */
+  unsigned int    prepare_range[MAX_RANGEPAIR*2]; /* Prepare key range, 2 each conn*/
+  unsigned int    run_range[MAX_RANGEPAIR*2]; /* Run key range, 2 each conn */
 } sb_globals_t;
 
 extern sb_globals_t sb_globals CK_CC_CACHELINE;
